@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="hi" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart AI Study Proctor & Focus Monitor</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              900: '#1e1b4b',
+            }
+          }
+        }
+      }
+    };
+  </script>
+  <!-- Google Fonts & Font Awesome Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+  <!-- TensorFlow.js Core & Models for Phone Detection -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+
+  <!-- MediaPipe Face Mesh for Accurate Eye Aspect Ratio (EAR) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    .mono-font {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .scanner-line {
+      background: linear-gradient(180deg, rgba(99, 102, 241, 0) 0%, rgba(99, 102, 241, 0.7) 50%, rgba(99, 102, 241, 0) 100%);
+      animation: scan 3s ease-in-out infinite;
+    }
+    @keyframes scan {
+      0%, 100% { top: 0%; opacity: 0.3; }
+      50% { top: 88%; opacity: 0.9; }
+    }
+    .pulse-danger {
+      animation: pulseAlert 1.2s infinite;
+    }
+    @keyframes pulseAlert {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+      50% { box-shadow: 0 0 0 14px rgba(239, 68, 68, 0); }
+    }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white">
+
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-50 px-4 lg:px-8 py-3.5">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center space-x-3">
+        <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 ring-1 ring-white/20">
+          <i class="fa-solid fa-graduation-cap text-xl text-white"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-lg font-bold text-white tracking-tight">Smart AI Study Proctor</h1>
+            <span class="text-[10px] font-semibold tracking-wider uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Live AI v2.4</span>
+          </div>
+          <p class="text-xs text-slate-400">स्मार्ट विद्यार्थी अध्ययन और ध्यान ट्रैकर (Sleep & Phone Detection)</p>
+        </div>
+      </div>
+
+      <!-- Session Stopwatch & Quick Status -->
+      <div class="flex items-center gap-3">
+        <div class="bg-slate-800/90 border border-slate-700/80 rounded-xl px-4 py-1.5 flex items-center gap-3 shadow-inner">
+          <i class="fa-regular fa-clock text-indigo-400"></i>
+          <div>
+            <div class="text-[10px] text-slate-400 font-medium uppercase tracking-wider">अध्ययन समय (Timer)</div>
+            <div id="sessionTimer" class="mono-font text-base font-bold text-slate-100 tracking-wider">00:00:00</div>
+          </div>
+        </div>
+        <button id="toggleTimerBtn" class="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition" title="Start/Pause Timer">
+          <i class="fa-solid fa-play text-xs" id="timerIcon"></i>
+        </button>
+        <button id="resetTimerBtn" class="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700 transition" title="Reset Timer">
+          <i class="fa-solid fa-rotate-right text-xs"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Left & Center Column: Video Stream & Visual Monitor (8 cols) -->
+    <section class="lg:col-span-8 flex flex-col space-y-4">
+      
+      <!-- Video Container Card -->
+      <div id="videoContainer" class="relative bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl transition-all duration-300 ring-1 ring-slate-800">
+        
+        <!-- Camera Feed & Canvas Layer -->
+        <div class="relative w-full aspect-video bg-black flex items-center justify-center overflow-hidden">
+          <video id="webcam" class="w-full h-full object-cover transform -scale-x-100" playsinline autoplay muted></video>
+          <canvas id="detectionCanvas" class="absolute inset-0 w-full h-full object-cover transform -scale-x-100 pointer-events-none"></canvas>
+
+          <!-- Scanning Overlay Line -->
+          <div id="scannerOverlay" class="absolute left-0 right-0 h-10 scanner-line hidden pointer-events-none"></div>
+
+          <!-- Fallback when camera is stopped -->
+          <div id="cameraOfflineNotice" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 text-center p-6 z-10">
+            <div class="w-16 h-16 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 mb-3 shadow-inner">
+              <i class="fa-solid fa-video-slash text-2xl"></i>
+            </div>
+            <h3 class="text-base font-semibold text-slate-200">कैमरा बंद है (Camera Inactive)</h3>
+            <p class="text-xs text-slate-400 max-w-sm mt-1">स्टडी मॉनिटरिंग और एआई सुरक्षा शुरू करने के लिए नीचे 'Start Proctor' बटन दबाएँ।</p>
+          </div>
+
+          <!-- Realtime Flash Badge on Danger (Eyes Closed / Phone) -->
+          <div id="dangerBanner" class="absolute top-4 left-4 right-4 bg-red-600/90 backdrop-blur-md text-white px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center justify-between shadow-lg opacity-0 transition-opacity duration-300 pointer-events-none border border-red-400/40">
+            <div class="flex items-center space-x-2.5">
+              <i class="fa-solid fa-triangle-exclamation text-yellow-300 animate-bounce"></i>
+              <span id="dangerBannerText">अलर्ट: ध्यान दें!</span>
+            </div>
+            <span class="mono-font text-xs bg-red-800/80 px-2 py-0.5 rounded text-red-200">AI PROCTOR ALERT</span>
+          </div>
+
+          <!-- Quick Metrics Bar (Top Right Overlay) -->
+          <div class="absolute top-4 right-4 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/60 text-[11px] font-mono flex items-center gap-3 text-slate-300">
+            <div class="flex items-center gap-1.5">
+              <span class="h-2 w-2 rounded-full bg-emerald-500" id="fpsDot"></span>
+              <span id="fpsCount">-- FPS</span>
+            </div>
+            <div class="border-l border-slate-700 pl-2 flex items-center gap-1">
+              <span>EAR:</span>
+              <span id="earValOverlay" class="font-bold text-indigo-400">0.00</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Camera Controls Toolbar -->
+        <div class="p-3.5 bg-slate-900/95 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center space-x-2">
+            <button id="startProctorBtn" class="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-medium text-xs md:text-sm px-4 py-2.5 rounded-xl shadow-lg shadow-indigo-600/20 transition">
+              <i class="fa-solid fa-shield-halved"></i>
+              <span>निगरानी शुरू करें (Start Proctor)</span>
+            </button>
+            <button id="stopProctorBtn" disabled class="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-400 hover:text-white font-medium text-xs md:text-sm px-4 py-2.5 rounded-xl transition border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed">
+              <i class="fa-solid fa-power-off"></i>
+              <span>रोकें (Stop)</span>
+            </button>
+          </div>
+
+          <!-- Quick toggles (Voice, Alarm, Mic) -->
+          <div class="flex items-center space-x-1.5">
+            <button id="toggleVoiceBtn" class="px-3 py-2 rounded-xl bg-slate-800 text-indigo-400 hover:bg-slate-700 text-xs font-medium border border-slate-700 flex items-center gap-2 transition" title="Voice Guidance Prompt">
+              <i class="fa-solid fa-volume-high" id="voiceToggleIcon"></i>
+              <span class="hidden sm:inline" id="voiceToggleText">आवाज़ चालू</span>
+            </button>
+            <button id="toggleBeepBtn" class="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-medium border border-slate-700 flex items-center gap-2 transition" title="Alarm Buzzer">
+              <i class="fa-solid fa-bell" id="beepToggleIcon"></i>
+              <span class="hidden sm:inline" id="beepToggleText">बीप चालू</span>
+            </button>
+            <button id="testAudioBtn" class="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-medium border border-slate-700 transition" title="Test Voice Output">
+              <i class="fa-solid fa-vial"></i>
+              <span class="hidden sm:inline">टेस्ट आवाज़</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <!-- Status 1: Focus State -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col justify-between">
+          <div class="flex items-center justify-between text-slate-400 mb-1">
+            <span class="text-xs">स्थिति (Status)</span>
+            <i class="fa-solid fa-user-check text-xs text-indigo-400"></i>
+          </div>
+          <div id="statusBadge" class="text-xs md:text-sm font-bold text-slate-400 flex items-center gap-1.5">
+            <span class="h-2 w-2 rounded-full bg-slate-500"></span>
+            <span>तैयार (Ready)</span>
+          </div>
+        </div>
+
+        <!-- Status 2: Eyes Condition -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col justify-between">
+          <div class="flex items-center justify-between text-slate-400 mb-1">
+            <span class="text-xs">आँखें (Eye EAR)</span>
+            <i class="fa-regular fa-eye text-xs text-emerald-400"></i>
+          </div>
+          <div class="flex items-baseline justify-between">
+            <span id="eyeStateText" class="text-xs md:text-sm font-bold text-emerald-400">खुली हैं</span>
+            <span id="earScore" class="mono-font text-xs text-slate-400">0.00</span>
+          </div>
+        </div>
+
+        <!-- Status 3: Mobile Phone Detection -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col justify-between">
+          <div class="flex items-center justify-between text-slate-400 mb-1">
+            <span class="text-xs">फ़ोन (Phone)</span>
+            <i class="fa-solid fa-mobile-screen text-xs text-amber-400"></i>
+          </div>
+          <div id="phoneStateText" class="text-xs md:text-sm font-bold text-emerald-400 flex items-center gap-1.5">
+            <i class="fa-solid fa-circle-check text-xs"></i>
+            <span>कोई फोन नहीं</span>
+          </div>
+        </div>
+
+        <!-- Status 4: Ambient Noise Meter -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col justify-between">
+          <div class="flex items-center justify-between text-slate-400 mb-1">
+            <span class="text-xs">शोर स्तर (Noise)</span>
+            <i class="fa-solid fa-microphone-lines text-xs text-violet-400"></i>
+          </div>
+          <div>
+            <div class="flex items-center justify-between text-xs mb-1">
+              <span id="noiseLevelText" class="font-medium text-slate-300">शांत (Calm)</span>
+              <span id="noiseDbValue" class="mono-font text-slate-400">0 dB</span>
+            </div>
+            <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+              <div id="noiseBar" class="bg-emerald-500 h-1.5 rounded-full transition-all duration-150" style="width: 5%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Right Column: Settings & Live Activity Logs (4 cols) -->
+    <section class="lg:col-span-4 flex flex-col space-y-4">
+      
+      <!-- AI Settings & Parental Preferences -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+          <h2 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
+            <i class="fa-solid fa-sliders text-indigo-400"></i>
+            <span>सेटिंग्स (Sensitivity & Voice)</span>
+          </h2>
+          <span class="text-[10px] text-slate-500 bg-slate-800 px-2 py-0.5 rounded">Adaptive AI</span>
+        </div>
+
+        <div class="space-y-3.5 text-xs">
+          <!-- Language preference for speech -->
+          <div>
+            <label class="block text-slate-400 mb-1">चेतावनी की भाषा (Voice Language):</label>
+            <select id="voiceLangSelect" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500">
+              <option value="en">English (Official Parents Tone)</option>
+              <option value="hi" selected>Hindi / Hinglish (हिंदी में निर्देश)</option>
+            </select>
+          </div>
+
+          <!-- Eye closure delay before trigger -->
+          <div>
+            <div class="flex justify-between text-slate-400 mb-1">
+              <span>नींद संवेदनशीलता (Eyes Closed Limit):</span>
+              <span id="eyeDelayVal" class="text-indigo-400 mono-font font-bold">1.5 s</span>
+            </div>
+            <input id="eyeDelaySlider" type="range" min="1.0" max="3.5" step="0.5" value="1.5" class="w-full accent-indigo-500 cursor-pointer bg-slate-800">
+          </div>
+
+          <!-- EAR Threshold -->
+          <div>
+            <div class="flex justify-between text-slate-400 mb-1">
+              <span>आँख बंद थ्रेशोल्ड (EAR Threshold):</span>
+              <span id="earThreshVal" class="text-indigo-400 mono-font font-bold">0.23</span>
+            </div>
+            <input id="earThreshSlider" type="range" min="0.18" max="0.30" step="0.01" value="0.23" class="w-full accent-indigo-500 cursor-pointer bg-slate-800">
+            <span class="text-[10px] text-slate-500">यदि मान 0.23 से नीचे जाता है तो आँखें बंद मानी जाएंगी।</span>
+          </div>
+
+          <!-- Alert Cooldown -->
+          <div>
+            <div class="flex justify-between text-slate-400 mb-1">
+              <span>अलर्ट अंतराल (Voice Cooldown):</span>
+              <span id="cooldownVal" class="text-indigo-400 mono-font font-bold">5 s</span>
+            </div>
+            <input id="cooldownSlider" type="range" min="3" max="10" step="1" value="5" class="w-full accent-indigo-500 cursor-pointer bg-slate-800">
+          </div>
+        </div>
+      </div>
+
+      <!-- Realtime Incident & Activity Log -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl flex-1 flex flex-col min-h-[300px]">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-clipboard-list text-indigo-400 text-xs"></i>
+            <h2 class="text-sm font-semibold text-slate-200">गतिविधि लॉग (Incident Logs)</h2>
+          </div>
+          <button id="clearLogsBtn" class="text-[11px] text-slate-500 hover:text-slate-300 transition">
+            <i class="fa-solid fa-trash-can mr-1"></i>साफ़ करें
+          </button>
+        </div>
+
+        <div id="logsContainer" class="space-y-2 overflow-y-auto flex-1 max-h-[340px] pr-1">
+          <!-- Initial Log Example -->
+          <div class="text-[11px] p-2 rounded-lg bg-slate-800/60 border border-slate-800 flex items-start gap-2">
+            <span class="text-indigo-400 mono-font font-semibold">00:00</span>
+            <div class="text-slate-300">सिस्टम लोड हो गया है। कृपया 'Start Proctor' पर क्लिक करें।</div>
+          </div>
+        </div>
+
+        <!-- Session Summary counter in footer of log -->
+        <div class="border-t border-slate-800 pt-3 mt-2 grid grid-cols-2 gap-2 text-center text-xs">
+          <div class="bg-slate-800/50 p-2 rounded-lg">
+            <div class="text-slate-400 text-[10px]">नींद चेतावनी (Drowsy)</div>
+            <div id="sleepAlertCount" class="font-bold text-amber-400 text-base mono-font">0</div>
+          </div>
+          <div class="bg-slate-800/50 p-2 rounded-lg">
+            <div class="text-slate-400 text-[10px]">फ़ोन चेतावनी (Phone)</div>
+            <div id="phoneAlertCount" class="font-bold text-red-400 text-base mono-font">0</div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <footer class="border-t border-slate-800/80 bg-slate-900/40 py-3 px-4 text-center text-xs text-slate-500">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span>All AI models run 100% locally in your browser. No video is ever sent to a server.</span>
+      </div>
+      <div>
+        <span>Design for GitHub Pages deployment. Private & Secure.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    /**
+     * Smart AI Study Proctor & Focus Monitor
+     * Self-contained JavaScript Logic
+     */
+    (function() {
+      // Configuration & State
+      const state = {
+        isRunning: false,
+        cocoModel: null,
+        faceMesh: null,
+        cameraStream: null,
+        audioStream: null,
+        audioContext: null,
+        analyser: null,
+        lastVoiceTime: 0,
+        voiceCooldown: 5000, // 5 seconds
+        eyeClosedStartTime: null,
+        eyeClosedDurationThreshold: 1500, // 1.5 seconds
+        earThreshold: 0.23,
+        voiceEnabled: true,
+        beepEnabled: true,
+        language: 'hi', // 'hi' or 'en'
+        sleepCount: 0,
+        phoneCount: 0,
+        timerInterval: null,
+        timerSeconds: 0,
+        isTimerRunning: false,
+        fpsTimer: 0,
+        frameCount: 0
+      };
+
+      // DOM Elements
+      const webcam = document.getElementById('webcam');
+      const canvas = document.getElementById('detectionCanvas');
+      const ctx = canvas.getContext('2d');
+      const startProctorBtn = document.getElementById('startProctorBtn');
+      const stopProctorBtn = document.getElementById('stopProctorBtn');
+      const cameraOfflineNotice = document.getElementById('cameraOfflineNotice');
+      const scannerOverlay = document.getElementById('scannerOverlay');
+      const dangerBanner = document.getElementById('dangerBanner');
+      const dangerBannerText = document.getElementById('dangerBannerText');
+      const videoContainer = document.getElementById('videoContainer');
+
+      // Badges & Status Indicators
+      const statusBadge = document.getElementById('statusBadge');
+      const eyeStateText = document.getElementById('eyeStateText');
+      const earScore = document.getElementById('earScore');
+      const earValOverlay = document.getElementById('earValOverlay');
+      const phoneStateText = document.getElementById('phoneStateText');
+      const noiseLevelText = document.getElementById('noiseLevelText');
+      const noiseDbValue = document.getElementById('noiseDbValue');
+      const noiseBar = document.getElementById('noiseBar');
+      const fpsCount = document.getElementById('fpsCount');
+      const sessionTimer = document.getElementById('sessionTimer');
+      const toggleTimerBtn = document.getElementById('toggleTimerBtn');
+      const timerIcon = document.getElementById('timerIcon');
+      const resetTimerBtn = document.getElementById('resetTimerBtn');
+      const logsContainer = document.getElementById('logsContainer');
+      const sleepAlertCount = document.getElementById('sleepAlertCount');
+      const phoneAlertCount = document.getElementById('phoneAlertCount');
+
+      // Toggles & Sliders
+      const toggleVoiceBtn = document.getElementById('toggleVoiceBtn');
+      const voiceToggleText = document.getElementById('voiceToggleText');
+      const voiceToggleIcon = document.getElementById('voiceToggleIcon');
+      const toggleBeepBtn = document.getElementById('toggleBeepBtn');
+      const beepToggleText = document.getElementById('beepToggleText');
+      const beepToggleIcon = document.getElementById('beepToggleIcon');
+      const testAudioBtn = document.getElementById('testAudioBtn');
+      const clearLogsBtn = document.getElementById('clearLogsBtn');
+
+      const voiceLangSelect = document.getElementById('voiceLangSelect');
+      const eyeDelaySlider = document.getElementById('eyeDelaySlider');
+      const eyeDelayVal = document.getElementById('eyeDelayVal');
+      const earThreshSlider = document.getElementById('earThreshSlider');
+      const earThreshVal = document.getElementById('earThreshVal');
+      const cooldownSlider = document.getElementById('cooldownSlider');
+      const cooldownVal = document.getElementById('cooldownVal');
+
+      // Audio Synth Beep using Web Audio API
+      function playBeep(frequency = 880, type = 'sine', duration = 0.3) {
+        if (!state.beepEnabled) return;
+        try {
+          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = type;
+          osc.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+          gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start();
+          osc.stop(audioCtx.currentTime + duration);
+        } catch (e) {
+          console.warn("Audio Context error:", e);
+        }
+      }
+
+      // Voice prompt trigger with speech synthesis & cooldown debouncer
+      function triggerVoiceAlert(type) {
+        const now = Date.now();
+        if (now - state.lastVoiceTime < state.voiceCooldown) {
+          return; // Still in cooldown
+        }
+        state.lastVoiceTime = now;
+
+        // Visual flash feedback on video frame
+        showFlashAlert(type);
+
+        if (!state.voiceEnabled && !state.beepEnabled) return;
+
+        let message = '';
+        if (type === 'eyes_closed') {
+          playBeep(650, 'sawtooth', 0.5);
+          if (state.language === 'hi') {
+            message = 'आँखें खोलो, जागो और पढ़ाई पर ध्यान दो!';
+          } else {
+            message = 'Open your eyes, wake up and focus on studying!';
+          }
+          state.sleepCount++;
+          sleepAlertCount.textContent = state.sleepCount;
+          addLog('नींद अलर्ट (Eyes Closed)', 'red', message);
+        } else if (type === 'phone_detected') {
+          playBeep(920, 'square', 0.4);
+          if (state.language === 'hi') {
+            message = 'कृपया अपना फ़ोन दूर रखें और पढ़ाई जारी रखें!';
+          } else {
+            message = 'Please put your phone away and keep studying!';
+          }
+          state.phoneCount++;
+          phoneAlertCount.textContent = state.phoneCount;
+          addLog('फ़ोन का उपयोग (Phone Detected)', 'amber', message);
+        }
+
+        if (state.voiceEnabled && 'speechSynthesis' in window) {
+          // Cancel ongoing and speak
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(message);
+          utterance.rate = 1.0;
+          utterance.pitch = 1.05;
+          
+          // Select Indian or appropriate voice if available
+          const voices = window.speechSynthesis.getVoices();
+          if (state.language === 'hi') {
+            const hiVoice = voices.find(v => v.lang.includes('hi') || v.lang.includes('IN'));
+            if (hiVoice) utterance.voice = hiVoice;
+          } else {
+            const enVoice = voices.find(v => v.lang.includes('en-IN') || v.lang.includes('en-US'));
+            if (enVoice) utterance.voice = enVoice;
+          }
+
+          window.speechSynthesis.speak(utterance);
+        }
+      }
+
+      function showFlashAlert(type) {
+        dangerBanner.classList.remove('opacity-0');
+        videoContainer.classList.add('pulse-danger', 'border-red-500');
+
+        if (type === 'eyes_closed') {
+          dangerBannerText.textContent = 'चेतावनी: आँखें बंद हैं! ध्यान दें (Eyes Closed)';
+        } else if (type === 'phone_detected') {
+          dangerBannerText.textContent = 'चेतावनी: फ़ोन डिटेक्ट हुआ! तुरंत अलग रखें (Phone Detected)';
+        }
+
+        setTimeout(() => {
+          dangerBanner.classList.add('opacity-0');
+          videoContainer.classList.remove('pulse-danger', 'border-red-500');
+        }, 2800);
+      }
+
+      function startTimer() {
+        if (state.isTimerRunning) return;
+        state.isTimerRunning = true;
+        timerIcon.classList.replace('fa-play', 'fa-pause');
+        state.timerInterval = setInterval(() => {
+          state.timerSeconds++;
+          const hrs = String(Math.floor(state.timerSeconds / 3600)).padStart(2, '0');
+          const mins = String(Math.floor((state.timerSeconds % 3600) / 60)).padStart(2, '0');
+          const secs = String(state.timerSeconds % 60).padStart(2, '0');
+          sessionTimer.textContent = `${hrs}:${mins}:${secs}`;
+        }, 1000);
+      }
+
+      function pauseTimer() {
+        state.isTimerRunning = false;
+        timerIcon.classList.replace('fa-pause', 'fa-play');
+        clearInterval(state.timerInterval);
+      }
+
+      function resetTimer() {
+        pauseTimer();
+        state.timerSeconds = 0;
+        sessionTimer.textContent = "00:00:00";
+      }
+
+      function addLog(title, color, detail) {
+        const time = new Date().toLocaleTimeString();
+        const logItem = document.createElement('div');
+        const colorClasses = {
+          red: 'bg-red-950/40 border-red-800/70 text-red-300',
+          amber: 'bg-amber-950/40 border-amber-800/70 text-amber-300',
+          emerald: 'bg-emerald-950/40 border-emerald-800/70 text-emerald-300',
+          indigo: 'bg-indigo-950/40 border-indigo-800/70 text-indigo-300',
+        }[color] || 'bg-slate-800/60 border-slate-700 text-slate-300';
+
+        logItem.className = `text-[11px] p-2 rounded-lg border ${colorClasses} flex items-start justify-between gap-2 animate-fadeIn`;
+        logItem.innerHTML = `
+          <div>
+            <span class="font-bold">${title}</span>: <span>${detail}</span>
+          </div>
+          <span class="mono-font text-[10px] text-slate-400 whitespace-nowrap">${time}</span>
+        `;
+        logsContainer.prepend(logItem);
+      }
+
+      async function setupAudioMeter(stream) {
+        try {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          state.audioContext = new AudioContext();
+          const source = state.audioContext.createMediaStreamSource(stream);
+          state.analyser = state.audioContext.createAnalyser();
+          state.analyser.fftSize = 256;
+          source.connect(state.analyser);
+
+          const dataArray = new Uint8Array(state.analyser.frequencyBinCount);
+          function checkNoise() {
+            if (!state.isRunning) return;
+            state.analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+              sum += dataArray[i];
+            }
+            const average = sum / dataArray.length;
+            const percentage = Math.min(100, Math.round((average / 128) * 100));
+            noiseBar.style.width = percentage + '%';
+            noiseDbValue.textContent = Math.round(average * 0.9) + ' dB';
+
+            if (average > 48) {
+              noiseLevelText.textContent = "शोरगुल (Noisy)";
+              noiseBar.className = "bg-red-500 h-1.5 rounded-full transition-all duration-150";
+            } else if (average > 25) {
+              noiseLevelText.textContent = "मध्यम (Moderate)";
+              noiseBar.className = "bg-amber-500 h-1.5 rounded-full transition-all duration-150";
+            } else {
+              noiseLevelText.textContent = "शांत (Calm)";
+              noiseBar.className = "bg-emerald-500 h-1.5 rounded-full transition-all duration-150";
+            }
+            requestAnimationFrame(checkNoise);
+          }
+          checkNoise();
+        } catch (e) {
+          console.warn("Microphone noise check failed", e);
+        }
+      }
+
+      // Euclidean distance calculation helper
+      function euclideanDistance(p1, p2) {
+        return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+      }
+
+      // Calculate Eye Aspect Ratio based on 6 landmark points
+      // MediaPipe FaceMesh Landmarks for Left Eye: [362, 385, 387, 263, 373, 380]
+      // Right Eye: [33, 160, 158, 133, 153, 144]
+      function calculateEAR(eyeLandmarks, allKeypoints) {
+        const p1 = allKeypoints[eyeLandmarks[0]]; // Corner left
+        const p2 = allKeypoints[eyeLandmarks[1]]; // Upper eyelid top 1
+        const p3 = allKeypoints[eyeLandmarks[2]]; // Upper eyelid top 2
+        const p4 = allKeypoints[eyeLandmarks[3]]; // Corner right
+        const p5 = allKeypoints[eyeLandmarks[4]]; // Lower eyelid 1
+        const p6 = allKeypoints[eyeLandmarks[5]]; // Lower eyelid 2
+
+        if (!p1 || !p2 || !p3 || !p4 || !p5 || !p6) return 0.3;
+
+        // Vertical distances
+        const v1 = euclideanDistance(p2, p6);
+        const v2 = euclideanDistance(p3, p5);
+        // Horizontal distance
+        const h = euclideanDistance(p1, p4);
+
+        if (h === 0) return 0;
+        return (v1 + v2) / (2.0 * h);
+      }
+
+      async function initializeModels() {
+        addLog('लोडिंग (Model Loading)', 'indigo', 'TensorFlow COCO-SSD और FaceMesh लोड हो रहे हैं...');
+        
+        // 1. Load COCO-SSD for phone detection
+        state.cocoModel = await cocoSsd.load();
+
+        // 2. Initialize MediaPipe FaceMesh
+        state.faceMesh = new FaceMesh({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+
+        state.faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        state.faceMesh.onResults(onFaceMeshResults);
+        addLog('तैयार (Models Ready)', 'emerald', 'सभी AI मॉडल सफलतापूर्वक लोड हो चुके हैं!');
+      }
+
+      let currentPhoneDetections = [];
+      let latestFaceResults = null;
+
+      function onFaceMeshResults(results) {
+        latestFaceResults = results;
+      }
+
+      // Detection Loop combining Face Mesh & Object Detection
+      async function startDetectionPipeline() {
+        if (!state.isRunning) return;
+
+        // Canvas dimension sync
+        if (canvas.width !== webcam.videoWidth || canvas.height !== webcam.videoHeight) {
+          canvas.width = webcam.videoWidth;
+          canvas.height = webcam.videoHeight;
+        }
+
+        // 1. Send webcam frame to MediaPipe FaceMesh
+        try {
+          await state.faceMesh.send({ image: webcam });
+        } catch (err) {
+          // Frame skip handling
+        }
+
+        // 2. Periodic Phone Detection using COCO-SSD (every 3 frames for performance)
+        state.frameCount++;
+        if (state.cocoModel && state.frameCount % 4 === 0) {
+          try {
+            const predictions = await state.cocoModel.detect(webcam);
+            currentPhoneDetections = predictions.filter(pred => 
+              (pred.class === 'cell phone' || pred.class === 'remote' || pred.class === 'book') && pred.score > 0.55
+            );
+          } catch (e) {
+            // Ignore temporary detection frame error
+          }
+        }
+
+        // 3. Clear canvas & draw annotations
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Process Face Results
+        let eyesClosed = false;
+        let avgEAR = 0.3;
+
+        if (latestFaceResults && latestFaceResults.multiFaceLandmarks && latestFaceResults.multiFaceLandmarks.length > 0) {
+          const landmarks = latestFaceResults.multiFaceLandmarks[0];
+
+          // Landmark indices
+          const rightEyeIdxs = [33, 160, 158, 133, 153, 144];
+          const leftEyeIdxs = [362, 385, 387, 263, 373, 380];
+
+          const rightEAR = calculateEAR(rightEyeIdxs, landmarks);
+          const leftEAR = calculateEAR(leftEyeIdxs, landmarks);
+          avgEAR = (rightEAR + leftEAR) / 2.0;
+
+          earScore.textContent = avgEAR.toFixed(2);
+          earValOverlay.textContent = avgEAR.toFixed(2);
+
+          // Draw eye contours
+          drawEyeBoundary(leftEyeIdxs, landmarks);
+          drawEyeBoundary(rightEyeIdxs, landmarks);
+
+          if (avgEAR < state.earThreshold) {
+            eyesClosed = true;
+            eyeStateText.textContent = "बंद (Closed)";
+            eyeStateText.className = "text-xs md:text-sm font-bold text-red-500";
+
+            if (!state.eyeClosedStartTime) {
+              state.eyeClosedStartTime = Date.now();
+            } else {
+              const closedElapsed = Date.now() - state.eyeClosedStartTime;
+              if (closedElapsed > state.eyeClosedDurationThreshold) {
+                // Trigger Parental Voice Alert
+                triggerVoiceAlert('eyes_closed');
+                statusBadge.innerHTML = `<span class="h-2 w-2 rounded-full bg-red-500 animate-ping"></span><span class="text-red-400">सो रहे हैं (Drowsy)</span>`;
+              }
+            }
+          } else {
+            state.eyeClosedStartTime = null;
+            eyeStateText.textContent = "खुली हैं (Open)";
+            eyeStateText.className = "text-xs md:text-sm font-bold text-emerald-400";
+          }
+        } else {
+          // No student face detected
+          statusBadge.innerHTML = `<span class="h-2 w-2 rounded-full bg-amber-500"></span><span class="text-amber-400">सामने कोई नहीं (Away)</span>`;
+        }
+
+        // Process Phone Detections
+        const cellPhone = currentPhoneDetections.find(p => p.class === 'cell phone');
+        if (cellPhone) {
+          phoneStateText.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-red-500"></i><span class="text-red-400">फ़ोन मिला! (Phone In Hand)</span>`;
+          drawBoundingBox(cellPhone, '#ef4444', 'CELL PHONE DETECTED');
+          triggerVoiceAlert('phone_detected');
+        } else {
+          phoneStateText.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-400"></i><span class="text-emerald-400">कोई फोन नहीं (Safe)</span>`;
+        }
+
+        // Overall status update if no alert is ongoing
+        if (!eyesClosed && !cellPhone && latestFaceResults && latestFaceResults.multiFaceLandmarks.length > 0) {
+          statusBadge.innerHTML = `<span class="h-2 w-2 rounded-full bg-emerald-500"></span><span class="text-emerald-400">पढ़ाई जारी है (Focused)</span>`;
+        }
+
+        // Calculate rudimentary FPS indicator
+        if (Date.now() - state.fpsTimer > 1000) {
+          fpsCount.textContent = `${Math.min(30, Math.round(state.frameCount))} FPS`;
+          state.frameCount = 0;
+          state.fpsTimer = Date.now();
+        }
+
+        if (state.isRunning) {
+          requestAnimationFrame(startDetectionPipeline);
+        }
+      }
+
+      function drawEyeBoundary(indices, landmarks) {
+        ctx.beginPath();
+        indices.forEach((idx, i) => {
+          const pt = landmarks[idx];
+          const x = pt.x * canvas.width;
+          const y = pt.y * canvas.height;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.closePath();
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      function drawBoundingBox(prediction, color, label) {
+        const [x, y, width, height] = prediction.bbox;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x, y, width, height);
+
+        // Label Tag
+        ctx.fillStyle = color;
+        ctx.fillRect(x, Math.max(0, y - 22), 160, 22);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 11px Inter, sans-serif';
+        ctx.fillText(label, x + 5, Math.max(14, y - 6));
+      }
+
+      async function startMonitoring() {
+        startProctorBtn.disabled = true;
+        startProctorBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>मॉडल शुरू हो रहे हैं...</span>`;
+
+        try {
+          if (!state.cocoModel || !state.faceMesh) {
+            await initializeModels();
+          }
+
+          // Request camera and microphone access
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+            audio: true
+          });
+
+          state.cameraStream = stream;
+          webcam.srcObject = stream;
+
+          await new Promise((resolve) => {
+            webcam.onloadedmetadata = () => {
+              webcam.play();
+              resolve();
+            };
+          });
+
+          // Setup mic noise analyzer
+          setupAudioMeter(stream);
+
+          state.isRunning = true;
+          startTimer();
+
+          // UI state switch
+          cameraOfflineNotice.classList.add('hidden');
+          scannerOverlay.classList.remove('hidden');
+          stopProctorBtn.disabled = false;
+          startProctorBtn.className = "hidden"; // Hide start button when running
+
+          addLog('सत्र शुरू (Started)', 'emerald', 'स्टडी प्रोक्टरिंग सक्रिय कर दी गई है।');
+          startDetectionPipeline();
+
+        } catch (err) {
+          console.error("Camera access error:", err);
+          alert("कृपया कैमरे और माइक्रोफ़ोन की अनुमति (Permission) दें ताकि एआई कार्य कर सके!");
+          startProctorBtn.disabled = false;
+          startProctorBtn.innerHTML = `<i class="fa-solid fa-shield-halved"></i><span>निगरानी शुरू करें (Start Proctor)</span>`;
+        }
+      }
+
+      function stopMonitoring() {
+        state.isRunning = false;
+        pauseTimer();
+
+        if (state.cameraStream) {
+          state.cameraStream.getTracks().forEach(track => track.stop());
+        }
+        if (state.audioContext && state.audioContext.state !== 'closed') {
+          state.audioContext.close();
+        }
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        cameraOfflineNotice.classList.remove('hidden');
+        scannerOverlay.classList.add('hidden');
+
+        startProctorBtn.className = "flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-medium text-xs md:text-sm px-4 py-2.5 rounded-xl shadow-lg shadow-indigo-600/20 transition";
+        startProctorBtn.disabled = false;
+        startProctorBtn.innerHTML = `<i class="fa-solid fa-shield-halved"></i><span>निगरानी शुरू करें (Start Proctor)</span>`;
+        stopProctorBtn.disabled = true;
+
+        statusBadge.innerHTML = `<span class="h-2 w-2 rounded-full bg-slate-500"></span><span>रोक दिया गया (Stopped)</span>`;
+        eyeStateText.textContent = "अक्रिय (Idle)";
+        noiseLevelText.textContent = "बंद (Off)";
+        noiseBar.style.width = "0%";
+
+        addLog('सत्र समाप्त (Stopped)', 'indigo', 'मॉनिटरिंग रोक दी गई है।');
+      }
+
+      startProctorBtn.addEventListener('click', startMonitoring);
+      stopProctorBtn.addEventListener('click', stopMonitoring);
+
+      toggleTimerBtn.addEventListener('click', () => {
+        if (state.isTimerRunning) pauseTimer();
+        else startTimer();
+      });
+
+      resetTimerBtn.addEventListener('click', resetTimer);
+
+      clearLogsBtn.addEventListener('click', () => {
+        logsContainer.innerHTML = '';
+        addLog('लॉग साफ़ (Cleared)', 'indigo', 'गतिविधि लॉग खाली किया गया।');
+      });
+
+      // Voice prompt toggle button
+      toggleVoiceBtn.addEventListener('click', () => {
+        state.voiceEnabled = !state.voiceEnabled;
+        if (state.voiceEnabled) {
+          voiceToggleIcon.className = "fa-solid fa-volume-high";
+          voiceToggleText.textContent = "आवाज़ चालू";
+          toggleVoiceBtn.classList.replace('text-slate-500', 'text-indigo-400');
+        } else {
+          voiceToggleIcon.className = "fa-solid fa-volume-xmark";
+          voiceToggleText.textContent = "आवाज़ म्यूट";
+          toggleVoiceBtn.classList.replace('text-indigo-400', 'text-slate-500');
+        }
+      });
+
+      // Beep buzzer toggle
+      toggleBeepBtn.addEventListener('click', () => {
+        state.beepEnabled = !state.beepEnabled;
+        if (state.beepEnabled) {
+          beepToggleIcon.className = "fa-solid fa-bell";
+          beepToggleText.textContent = "बीप चालू";
+          toggleBeepBtn.classList.replace('text-slate-500', 'text-slate-300');
+        } else {
+          beepToggleIcon.className = "fa-solid fa-bell-slash";
+          beepToggleText.textContent = "बीप बंद";
+          toggleBeepBtn.classList.replace('text-slate-300', 'text-slate-500');
+        }
+      });
+
+      // Test Audio Button
+      testAudioBtn.addEventListener('click', () => {
+        const testMsg = state.language === 'hi' 
+          ? 'यह एक टेस्ट आवाज़ है। आपका स्टडी मॉनिटर सिस्टम तैयार है।' 
+          : 'This is a test voice alert. Your study monitor is active and ready.';
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const ut = new SpeechSynthesisUtterance(testMsg);
+          window.speechSynthesis.speak(ut);
+        }
+        playBeep(880, 'sine', 0.3);
+      });
+
+      // Sensitivity Sliders
+      eyeDelaySlider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        state.eyeClosedDurationThreshold = val * 1000;
+        eyeDelayVal.textContent = val.toFixed(1) + ' s';
+      });
+
+      earThreshSlider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        state.earThreshold = val;
+        earThreshVal.textContent = val.toFixed(2);
+      });
+
+      cooldownSlider.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value);
+        state.voiceCooldown = val * 1000;
+        cooldownVal.textContent = val + ' s';
+      });
+
+      voiceLangSelect.addEventListener('change', (e) => {
+        state.language = e.target.value;
+      });
+
+      // Pre-warm Speech Synthesis voices
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.onvoiceschanged = () => {
+          window.speechSynthesis.getVoices();
+        };
+      }
+    })();
+  </script>
+</body>
+</html>
